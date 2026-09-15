@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "sclera",
+  "version": "1.0.0",
+  "name": "Sclera",
+  "description": "Eye Tracking for Minecraft VR",
+  "authors": [
+    "dojyaan42"
+  ],
+  "license": "MIT",
+  "environment": "client",
+  "icon": "assets/sclera/icon.png",
+  "entrypoints": {
+    "main": [
+      "org.sclera.ScleraMod"
+    ],
+    "modmenu": [
+      "org.sclera.ui.screens.ScleraModMenu"
+    ]
+  },
+  "mixins": [
+    "sclera.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.14.14",
+    "minecraft": [
+      "1.20",
+      "1.20.1"
+    ]
+  },
+  "suggests": {
+    "visor": ">=0.5.0",
+    "modmenu": "*"
+  }
+}

@@ -1,0 +1,21 @@
+# Gradle build outputs and caches
+.gradle/
+build/
+bin/
+
+# Fabric Loom runtime directory
+run/
+.fabric/
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+*.ipr
+*.iws
+
+# Temporary / OS files
+.DS_Store
+Thumbs.db
+*.log
+temp_find.ps1

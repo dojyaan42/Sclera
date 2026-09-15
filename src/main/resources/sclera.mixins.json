@@ -1,0 +1,21 @@
+{
+  "required": true,
+  "package": "org.sclera.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "client": [
+    "VRCursorHandlerMixin",
+    "HandledScreenAccessor",
+    "ScreenDebugMixin",
+    "InGameHudDebugMixin",
+    "VRHandRendererMixin",
+    "MouseClickHandlerMixin",
+    "GameRendererTargetingMixin",
+    "VROverlayGameScreenMixin",
+    "VROverlayInventoryMixin",
+    "GazeProjectileMixin",
+    "HandEffectCrosshairMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
