@@ -21,9 +21,23 @@ import org.vmstudio.visor.core.client.player.pose.LocalPlayerPose;
 @Mixin(value = org.vmstudio.essentials.core.client.gui.overlays.VROverlayInventory.class, remap = false)
 public class VROverlayInventoryMixin {
 
+    @org.spongepowered.asm.mixin.Shadow
+    private boolean isCanBeVisible() { throw new AssertionError(); }
+
+    @Inject(method = "onTick", at = @At("HEAD"), cancellable = true)
+    private void sclera$guardOnTick(org.spongepowered.asm.mixin.injection.callback.CallbackInfo ci) {
+        net.minecraft.client.MinecraftClient mc = net.minecraft.client.MinecraftClient.getInstance();
+        if (mc == null || mc.player == null) {
+            ci.cancel();
+        }
+    }
+
     @Inject(method = "updateVisibility", at = @At("RETURN"), cancellable = true)
     private void sclera$addGazeVisibility(CallbackInfoReturnable<Boolean> cir) {
-        if (cir.getReturnValue()) return;
+        if (cir.getReturnValue() || !isCanBeVisible()) return;
+
+        net.minecraft.client.MinecraftClient mc = net.minecraft.client.MinecraftClient.getInstance();
+        if (mc == null || mc.player == null || mc.world == null) return;
 
         EyeTrackingManager manager = EyeTrackingManager.getInstance();
         if (manager == null || !manager.isTrackingActive() || !manager.isGazeInInventory()) return;
@@ -41,7 +55,7 @@ public class VROverlayInventoryMixin {
             if (gazePose == null) return;
 
             if (ClientContext.cursorHandler != null
-                    && ClientContext.cursorHandler.isFacingOverlay(gazePose, self, true)) {
+                    && ClientContext.cursorHandler.isFacingOverlay(gazePose, self, false)) {
                 org.joml.Vector3fc pos = self.getPose().getPosition();
                 org.joml.Matrix4fc rot = self.getPose().getRotation();
                 float scale = self.getPose().getScale();

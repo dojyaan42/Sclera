@@ -36,6 +36,7 @@ public class ScreenDebugMixin {
     @Inject(method = "render", at = @At("HEAD"))
     private void sclera$syncMouseBeforeRender(DrawContext context, int mouseX, int mouseY, float delta, CallbackInfo ci) {
         if (!GazeCursorHandler.isVRActive()) return;
+        if (GazeCursorHandler.getInstance().isChatInputHandsOnly()) return;
 
         VROverlay overlay = sclera$findOverlayForScreen();
         if (overlay == null) return;
@@ -53,7 +54,16 @@ public class ScreenDebugMixin {
             focused = ClientContext.cursorHandler.getFocusedOverlay();
         }
 
-        if (focused == overlay) {
+        boolean isTargeted = (focused != null && focused == overlay);
+        if (!isTargeted && (focused == null || "game_screen".equals(overlay.getId()))
+                && overlay.getActiveCursorData() != null && overlay.getActiveCursorData().isInGui()) {
+            isTargeted = true;
+        }
+        if (!isTargeted && GazeCursorHandler.getInstance().getLastTargetOverlay() == overlay) {
+            isTargeted = true;
+        }
+
+        if (isTargeted) {
             MinecraftClient mc = MinecraftClient.getInstance();
             if (mc != null && mc.currentScreen == (Object) this) {
                 GazeCursorHandler.getInstance().syncGazeToMouse(this.width, this.height);
@@ -145,6 +155,7 @@ public class ScreenDebugMixin {
     @Unique
     private void sclera$doRenderPointer(DrawContext context) {
         if (!GazeCursorHandler.isVRActive()) return;
+        if (GazeCursorHandler.getInstance().isChatInputHandsOnly()) return;
         EyeTrackingManager manager = EyeTrackingManager.getInstance();
         if (manager == null || !manager.isTrackingActive()) return;
 

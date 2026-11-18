@@ -10,6 +10,7 @@ import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
 import org.joml.Vector3fc;
 import org.sclera.tracking.EyeTrackingManager;
+import org.sclera.network.ScleraGazeChannel;
 import org.sclera.ui.GazeCursorHandler;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -144,6 +145,16 @@ public abstract class GameRendererTargetingMixin {
 
         LocalPlayerPose renderPose = localPlayer.getPoseData(PlayerPoseType.RENDER);
         if (renderPose == null) return;
+
+        if (manager.getTrackingMode() == EyeTrackingManager.TrackingMode.EYE_TRACKING
+                && manager.isTrackingActive()) {
+            VRPose eyePose = GazeCursorHandler.getInstance().getGazePose(renderPose);
+            if (eyePose != null && eyePose.getDirection() != null) {
+                ScleraGazeChannel.send(eyePose.getDirection(), System.nanoTime());
+            }
+        } else {
+            ScleraGazeChannel.send(null, System.nanoTime());
+        }
 
         HandType activeHand = localPlayer.getActiveHand();
         if (activeHand == null) activeHand = HandType.MAIN;

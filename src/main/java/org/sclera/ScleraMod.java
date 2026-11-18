@@ -3,7 +3,6 @@ package org.sclera;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.loader.api.FabricLoader;
 import org.sclera.addon.ScleraVisorAddon;
-import org.sclera.tracking.EyeTrackingManager;
 import org.vmstudio.visor.api.VisorAPI;
 
 /**
@@ -14,14 +13,14 @@ public class ScleraMod implements ModInitializer {
 
     @Override
     public void onInitialize() {
+        if (FabricLoader.getInstance().getEnvironmentType() == net.fabricmc.api.EnvType.CLIENT) {
+            org.sclera.config.ScleraSettings.initialize();
+        }
         if (FabricLoader.getInstance().isModLoaded("visor")) {
             try {
                 VisorAPI.registerAddon(new ScleraVisorAddon());
-            } catch (Throwable t) {
-                t.printStackTrace();
+            } catch (Throwable ignored) {
             }
-        } else {
-            EyeTrackingManager.getInstance().init(9000, 9002);
         }
     }
 }

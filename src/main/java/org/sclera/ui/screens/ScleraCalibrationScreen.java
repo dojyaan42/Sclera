@@ -98,14 +98,6 @@ public class ScleraCalibrationScreen extends Screen {
             // Emerald green target with cross
             drawTarget(context, cx, cy, 0xFF00DD44, 0xFF00FF66);
         }
-
-        // Render pointer to visualize alignment with center
-        if (manager.isSubtlePointerEnabled() && !manager.isDebugPointerEnabled()) {
-            GazeCursorHandler.getInstance().renderSubtlePointer(context, this.width, this.height);
-        }
-        if (manager.isDebugPointerEnabled()) {
-            GazeCursorHandler.getInstance().renderDebugPointer(context, this.width, this.height);
-        }
     }
 
     private void drawTarget(DrawContext context, int cx, int cy, int outerColor, int innerColor) {

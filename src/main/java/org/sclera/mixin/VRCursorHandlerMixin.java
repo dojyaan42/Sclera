@@ -18,6 +18,11 @@ import org.vmstudio.visor.core.client.gui.VRCursorHandlerImpl;
 @Mixin(value = VRCursorHandlerImpl.class, remap = false)
 public class VRCursorHandlerMixin {
 
+    @org.spongepowered.asm.mixin.injection.Inject(method = "process", at = @At("HEAD"))
+    private void sclera$refreshInputState(org.spongepowered.asm.mixin.injection.callback.CallbackInfo ci) {
+        GazeCursorHandler.getInstance().refreshMenuInputState();
+    }
+
     @Redirect(
         method = "getCursorResult",
         at = @At(
@@ -28,6 +33,12 @@ public class VRCursorHandlerMixin {
     private VRPose sclera$redirectCursorPose(VRPlayerPoseClient poseClient, HandType handType) {
         if (poseClient == null) return null;
         VRPose handPose = poseClient.getHand(handType);
+
+        net.minecraft.client.gui.screen.Screen activeScreen = GazeCursorHandler.getInstance().getActiveScreen();
+        if (GazeCursorHandler.getInstance().isChatInputHandsOnly()) {
+            GazeCursorHandler.getInstance().setHandControllingMenu(handType, true);
+            return handPose;
+        }
 
         EyeTrackingManager manager = EyeTrackingManager.getInstance();
         if (manager == null || !manager.isTrackingActive() || !GazeCursorHandler.isVRActive()) {
@@ -41,7 +52,10 @@ public class VRCursorHandlerMixin {
 
         boolean inContainer = GazeCursorHandler.isContainerActive();
         boolean inWristInv = GazeCursorHandler.isWristInventoryActive();
-        net.minecraft.client.gui.screen.Screen activeScreen = GazeCursorHandler.getInstance().getActiveScreen();
+        // Calibration uses gaze regardless of the menu input setting.
+        if (activeScreen instanceof org.sclera.ui.screens.ScleraCalibrationScreen) {
+            return gazePose;
+        }
 
         // In menus, container screens, or wrist inventory:
         if (activeScreen != null || inContainer || inWristInv) {

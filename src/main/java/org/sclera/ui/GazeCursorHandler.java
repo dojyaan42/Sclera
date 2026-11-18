@@ -6,6 +6,7 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.item.CrossbowItem;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.TridentItem;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.projectile.ProjectileUtil;
 import net.minecraft.util.hit.BlockHitResult;
@@ -15,6 +16,7 @@ import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.RaycastContext;
 import net.minecraft.world.World;
+import org.sclera.config.ScleraClientConfig;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.joml.Vector3f;
@@ -57,21 +59,22 @@ public class GazeCursorHandler {
     private volatile Vec3d latestHandPos;
     private volatile long latestGazeTime = 0;
 
+    private VROverlayScreen lastTargetOverlay = null;
     private float lastNormX = 0.5f;
     private float lastNormY = 0.5f;
     private boolean hasHit = false;
     private long lastHitTime = 0;
 
+    private final MenuHandTracker mainMenuHand = new MenuHandTracker();
+    private final MenuHandTracker offMenuHand = new MenuHandTracker();
     private final Vector3f lastMainHandPos = new Vector3f();
-    private long lastMainHandPosTime = 0;
-    private long lastMainHandMoveTime = 0;
-    private long lastMainHandAimTime = 0;
-
     private final Vector3f lastOffHandPos = new Vector3f();
-    private long lastOffHandPosTime = 0;
-    private long lastOffHandMoveTime = 0;
-    private long lastOffHandAimTime = 0;
-
+    private long lastMainHandPosTime, lastOffHandPosTime;
+    private long lastMainHandMoveTime, lastOffHandMoveTime;
+    private Object menuPlayer;
+    private Object menuScreen;
+    private boolean menuTrackingActive;
+    private int menuInputMode;
     private boolean gazeInteracting = false;
     private boolean mainHandActiveInMenu = false;
     private boolean offhandActiveInMenu = false;
@@ -82,16 +85,42 @@ public class GazeCursorHandler {
         return INSTANCE;
     }
 
-    public void recordCursorPos(float normX, float normY) {
+    private volatile boolean blinkSyntheticUpdate = false;
+    public boolean isBlinkSyntheticUpdate() { return blinkSyntheticUpdate; }
+    public void setBlinkSyntheticUpdate(boolean blinkSyntheticUpdate) { this.blinkSyntheticUpdate = blinkSyntheticUpdate; }
+
+    public void recordCursorPos(VROverlayScreen overlay, float normX, float normY) {
+        if (overlay != null) {
+            this.lastTargetOverlay = overlay;
+        }
         this.lastNormX = normX;
         this.lastNormY = normY;
         this.hasHit = true;
         this.lastHitTime = System.currentTimeMillis();
     }
 
+    public void recordCursorPos(float normX, float normY) {
+        recordCursorPos(null, normX, normY);
+    }
+
     public float getLastNormX() { return lastNormX; }
     public float getLastNormY() { return lastNormY; }
-    public boolean hasHit() { return hasHit; }
+
+    public boolean hasHit() {
+        EyeTrackingManager manager = EyeTrackingManager.getInstance();
+        boolean blinking = (manager != null && manager.isTrackingActive()
+                && manager.getTrackingMode() != EyeTrackingManager.TrackingMode.HEAD_TRACKING
+                && manager.getGazeData().blink);
+        long timeout = blinking ? 1200 : 350;
+        return hasHit && (System.currentTimeMillis() - lastHitTime < timeout);
+    }
+
+    public VROverlayScreen getLastTargetOverlay() {
+        if (!hasHit()) {
+            return null;
+        }
+        return lastTargetOverlay;
+    }
 
     public void calibrateToOverlayCenter() {
         EyeTrackingManager manager = EyeTrackingManager.getInstance();
@@ -276,6 +305,26 @@ public class GazeCursorHandler {
         return null;
     }
 
+    public boolean isChatInputHandsOnly() {
+        boolean trackingInChat = ScleraClientConfig.getInstance().isTrackingInChat();
+        if (trackingInChat) return false;
+
+        MinecraftClient mc = MinecraftClient.getInstance();
+        Screen activeScreen = getActiveScreen();
+        boolean chatScreenActive = activeScreen instanceof net.minecraft.client.gui.screen.ChatScreen
+                || (mc != null && mc.currentScreen instanceof net.minecraft.client.gui.screen.ChatScreen);
+
+        VROverlay focused = null;
+        try {
+            if (ClientContext.cursorHandler != null) {
+                focused = ClientContext.cursorHandler.getFocusedOverlay();
+            }
+        } catch (Throwable ignored) {}
+        boolean keyboardFocused = focused != null && "keyboard".equals(focused.getId());
+
+        return ChatTrackingPolicy.shouldForceHands(trackingInChat, chatScreenActive, keyboardFocused);
+    }
+
     public int[] getOverlayPointerPos(VROverlay overlay, int width, int height) {
         if (overlay == null || overlay.getPose() == null) return null;
         try {
@@ -343,7 +392,9 @@ public class GazeCursorHandler {
         if (!handsActive) return false;
         if (!gazeActive) return true;
 
-        return mainHandActiveInMenu || offhandActiveInMenu;
+        HandType cursorHand = ClientContext.cursorHandler == null ? HandType.MAIN
+                : ClientContext.cursorHandler.getCursorHand();
+        return isHandControllingMenu(cursorHand);
     }
 
     public void setHandControllingMenu(HandType handType, boolean active) {
@@ -354,156 +405,106 @@ public class GazeCursorHandler {
         }
     }
 
-    public boolean isHandAimingAtOverlay(VRPose handPose) {
-        if (handPose == null) return false;
-        try {
-            if (ClientContext.overlayManager != null) {
-                // 1. Direct check for active container overlay
-                if (isContainerActive()) {
-                    VROverlay container = ClientContext.overlayManager.getOverlay("container");
-                    if (container != null && container.getPose() != null) {
-                        Vector3fc pos = container.getPose().getPosition();
-                        Matrix4fc rot = container.getPose().getRotation();
-                        float scale = container.getPose().getScale();
-                        float aspect = container.getAspectRatio();
-                        if (ClientContext.cursorHandler != null) {
-                            Vector3f res = ClientContext.cursorHandler.findCursorPosition3D(handPose, pos, rot, scale, aspect);
-                            if (res != null && res.z >= 0 && res.x >= -0.05f && res.x <= 1.05f && res.y >= -0.05f && res.y <= 1.05f) {
-                                return true;
-                            }
-                        }
-                    }
-                }
+    public void refreshMenuInputState() {
+        EyeTrackingManager manager = EyeTrackingManager.getInstance();
+        boolean active = isVRActive() && manager.isTrackingActive();
+        int mode = (manager.isGazeInMenus() ? 1 : 0) | (manager.isHandsInMenus() ? 2 : 0)
+                | (manager.isGazeInInventory() ? 4 : 0) | (manager.isHandsInInventory() ? 8 : 0)
+                | (ScleraClientConfig.getInstance().isTrackingInChat() ? 0 : 16);
+        Object player = ClientContext.localPlayer;
+        Object screen = getActiveScreen();
+        if (active != menuTrackingActive || mode != menuInputMode || player != menuPlayer || screen != menuScreen) {
+            mainHandActiveInMenu = offhandActiveInMenu = false;
+            lastTargetOverlay = null;
+            hasHit = false;
+            menuTrackingActive = active;
+            menuInputMode = mode;
+            menuPlayer = player;
+            menuScreen = screen;
+        }
+    }
 
-                // 2. Direct check for active wrist inventory overlay
-                if (isWristInventoryActive()) {
-                    VROverlay inv = ClientContext.overlayManager.getOverlay("inventory");
-                    if (inv != null && inv.getPose() != null) {
-                        Vector3fc pos = inv.getPose().getPosition();
-                        Matrix4fc rot = inv.getPose().getRotation();
-                        float scale = inv.getPose().getScale();
-                        float aspect = inv.getAspectRatio();
-                        if (ClientContext.cursorHandler != null) {
-                            Vector3f res = ClientContext.cursorHandler.findCursorPosition3D(handPose, pos, rot, scale, aspect);
-                            if (res != null && res.z >= 0 && res.x >= -0.05f && res.x <= 1.05f && res.y >= -0.05f && res.y <= 1.05f) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-
-                // 3. Fallback check across all registered overlays
-                if (ClientContext.overlayManager.getOverlaysRegistry() != null) {
-                    for (VROverlay overlay : ClientContext.overlayManager.getOverlaysRegistry().getSortedComponents()) {
-                        if (overlay.isVisible() && overlay.supportsCursor() && overlay.getPose() != null) {
-                            Vector3fc pos = overlay.getPose().getPosition();
-                            Matrix4fc rot = overlay.getPose().getRotation();
-                            float scale = overlay.getPose().getScale();
-                            float aspect = overlay.getAspectRatio();
-                            if (ClientContext.cursorHandler != null) {
-                                Vector3f res = ClientContext.cursorHandler.findCursorPosition3D(handPose, pos, rot, scale, aspect);
-                                if (res != null && res.z >= 0 && res.x >= -0.05f && res.x <= 1.05f && res.y >= -0.05f && res.y <= 1.05f) {
-                                    return true;
-                                }
-                            }
-                        }
-                    }
-                }
+    private VROverlay findAimedOverlay(VRPose pose) {
+        if (pose == null || ClientContext.overlayManager == null || ClientContext.cursorHandler == null) return null;
+        if (ClientContext.overlayManager.getOverlaysRegistry() == null) return null;
+        VROverlay nearest = null;
+        float distance = 5f;
+        for (VROverlay overlay : ClientContext.overlayManager.getOverlaysRegistry().getSortedComponents()) {
+            if (!overlay.isVisible() || !overlay.supportsCursor() || overlay.getPose() == null) continue;
+            if (!ClientContext.cursorHandler.isFacingOverlay(pose, overlay, false)) continue;
+            Vector3f hit = ClientContext.cursorHandler.findCursorPosition3D(pose, overlay.getPose().getPosition(),
+                    overlay.getPose().getRotation(), overlay.getPose().getScale(), overlay.getAspectRatio());
+            if (hit != null && hit.z >= 0 && hit.z <= distance && overlay.isWithinCursorBounds(hit.x, hit.y)) {
+                nearest = overlay;
+                distance = hit.z;
             }
-        } catch (Throwable ignored) {}
-        return false;
+        }
+        return nearest;
     }
 
     public boolean shouldUseHandInMenu(VRPlayerPoseClient poseClient, HandType handType) {
-        if (!isVRActive()) return true;
+        refreshMenuInputState();
         EyeTrackingManager manager = EyeTrackingManager.getInstance();
-        if (!manager.isTrackingActive()) {
+        if (isChatInputHandsOnly()) {
             setHandControllingMenu(handType, true);
             return true;
         }
-
-        Screen screen = getActiveScreen();
-        boolean isInv = isInventoryOrContainerActive(screen);
-        boolean gazeActive = isInv ? manager.isGazeInInventory() : manager.isGazeInMenus();
-        boolean handsActive = isInv ? manager.isHandsInInventory() : manager.isHandsInMenus();
-
-        if (!handsActive) {
-            setHandControllingMenu(handType, false);
-            return false;
-        }
-        if (!gazeActive) {
+        if (!isVRActive() || !manager.isTrackingActive()) {
             setHandControllingMenu(handType, true);
             return true;
         }
-
-        // HYBRID Mode: Both are active
-        VRPose hand = poseClient != null ? poseClient.getHand(handType) : null;
-        if (hand == null) {
-            setHandControllingMenu(handType, false);
-            return false;
+        boolean inventory = isInventoryOrContainerActive(getActiveScreen());
+        boolean gaze = inventory ? manager.isGazeInInventory() : manager.isGazeInMenus();
+        boolean hands = inventory ? manager.isHandsInInventory() : manager.isHandsInMenus();
+        boolean active = hands && !gaze;
+        if (hands && gaze && poseClient != null) {
+            VRPose hand = poseClient.getHand(handType);
+            VROverlay handTarget = findAimedOverlay(hand);
+            MenuHandTracker tracker = handType == HandType.OFFHAND ? offMenuHand : mainMenuHand;
+            active = tracker.update(handTarget);
         }
-
-        boolean aiming = isHandAimingAtOverlay(hand);
-        if (!aiming) {
-            setHandControllingMenu(handType, false);
-            return false;
-        }
-
-        boolean isOffhand = (handType == HandType.OFFHAND);
-        long now = System.currentTimeMillis();
-        boolean moving = isHandMoving(poseClient, handType);
-        if (moving) {
-            if (isOffhand) {
-                lastOffHandAimTime = now;
-            } else {
-                lastMainHandAimTime = now;
-            }
-        }
-        long lastAim = isOffhand ? lastOffHandAimTime : lastMainHandAimTime;
-        boolean active = (now - lastAim) < 400;
         setHandControllingMenu(handType, active);
         return active;
     }
-
+    /** Movement history for world interactions is independent of menu focus. */
     public boolean isHandMoving(VRPlayerPoseClient poseClient, HandType handType) {
         VRPose hand = poseClient.getHand(handType);
-        if (hand == null) return false;
-        Vector3fc currentPos = hand.getPosition();
-        if (currentPos == null) return false;
-
-        boolean isOffhand = (handType == HandType.OFFHAND);
-        Vector3f lastPos = isOffhand ? lastOffHandPos : lastMainHandPos;
-        long lastPosTime = isOffhand ? lastOffHandPosTime : lastMainHandPosTime;
-        long lastMoveTime = isOffhand ? lastOffHandMoveTime : lastMainHandMoveTime;
-
+        if (hand == null || hand.getPosition() == null) return false;
+        Vector3fc position = hand.getPosition();
+        boolean offhand = handType == HandType.OFFHAND;
+        Vector3f previous = offhand ? lastOffHandPos : lastMainHandPos;
+        long sampledAt = offhand ? lastOffHandPosTime : lastMainHandPosTime;
+        long movedAt = offhand ? lastOffHandMoveTime : lastMainHandMoveTime;
         long now = System.currentTimeMillis();
-        if (lastPosTime == 0) {
-            lastPos.set(currentPos);
-            if (isOffhand) lastOffHandPosTime = now;
-            else lastMainHandPosTime = now;
+        if (sampledAt == 0) {
+            previous.set(position);
+            if (offhand) lastOffHandPosTime = now; else lastMainHandPosTime = now;
             return false;
         }
-
-        long dtMs = now - lastPosTime;
-        if (dtMs >= 10) {
-            float dt = dtMs / 1000.0f;
-            float dist = currentPos.distance(lastPos);
-            float speed = dist / dt; // Speed in meters per second
-
-            // Intentional hand movement in VR is > 0.28 m/s (28 cm/s).
-            // Tremor / trigger pressing without swinging is typically < 0.15 m/s.
-            if (speed > 0.28f) {
-                lastMoveTime = now;
-                if (isOffhand) lastOffHandMoveTime = now;
-                else lastMainHandMoveTime = now;
+        long elapsed = now - sampledAt;
+        if (elapsed >= 10) {
+            if (previous.distance(position) / (elapsed / 1000f) > .28f) {
+                movedAt = now;
+                if (offhand) lastOffHandMoveTime = now; else lastMainHandMoveTime = now;
             }
-
-            lastPos.set(currentPos);
-            if (isOffhand) lastOffHandPosTime = now;
-            else lastMainHandPosTime = now;
+            previous.set(position);
+            if (offhand) lastOffHandPosTime = now; else lastMainHandPosTime = now;
         }
+        return now - movedAt < 350;
+    }
 
-        return (now - lastMoveTime) < 350;
+    /** Shares the bow reticle only while a trident is being aimed with eyes or head. */
+    public boolean isTridentGazeAimActive() {
+        EyeTrackingManager manager = EyeTrackingManager.getInstance();
+        if (!isVRActive() || !manager.isTrackingActive() || !manager.isBowGazeAimEnabled()
+                || !manager.isGazeInWorld()
+                || manager.getTrackingMode() == EyeTrackingManager.TrackingMode.OFF
+                || manager.getCrosshairMode() == EyeTrackingManager.CrosshairMode.DISABLED) {
+            return false;
+        }
+        MinecraftClient mc = MinecraftClient.getInstance();
+        return mc != null && mc.player != null && mc.world != null && mc.player.isUsingItem()
+                && mc.player.getActiveItem().getItem() instanceof TridentItem;
     }
 
     public VRPose getGazePose(VRPlayerPoseClient playerPose) {
@@ -522,7 +523,8 @@ public class GazeCursorHandler {
 
         Matrix4f rawGazeRot;
         if (manager.getTrackingMode() == EyeTrackingManager.TrackingMode.HEAD_TRACKING) {
-            rawGazeRot = new Matrix4f(hmd.getRawRotation());
+            rawGazeRot = new Matrix4f(hmd.getRawRotation())
+                .rotateX((float) Math.toRadians(EyeTrackingManager.HEAD_TRACKING_PITCH_OFFSET_DEG));
         } else {
             float effectiveYaw = (gaze.filteredYaw + manager.getOffsetYaw()) * manager.getSensitivity();
             float effectivePitch = -(gaze.filteredPitch + manager.getOffsetPitch()) * manager.getSensitivity();
@@ -648,21 +650,22 @@ public class GazeCursorHandler {
     }
 
     public int[] getScreenPointerPos(int screenWidth, int screenHeight) {
+        if (hasHit && lastNormX >= 0f && lastNormY >= 0f) {
+            int px = Math.round(lastNormX * screenWidth);
+            int py = Math.round(lastNormY * screenHeight);
+            px = Math.max(2, Math.min(screenWidth - 2, px));
+            py = Math.max(2, Math.min(screenHeight - 2, py));
+            return new int[]{px, py};
+        }
+
         EyeTrackingManager manager = EyeTrackingManager.getInstance();
         GazeData gaze = manager.getGazeData();
         int px, py;
 
-        long now = System.currentTimeMillis();
-        boolean recentHit = hasHit && (now - lastHitTime < 400);
-
-        if (recentHit && lastNormX >= -0.2f && lastNormX <= 1.2f && lastNormY >= -0.2f && lastNormY <= 1.2f) {
-            px = Math.round(lastNormX * screenWidth);
-            py = Math.round(lastNormY * screenHeight);
-        } else if (manager.getTrackingMode() == EyeTrackingManager.TrackingMode.HEAD_TRACKING) {
+        if (manager.getTrackingMode() == EyeTrackingManager.TrackingMode.HEAD_TRACKING) {
             px = screenWidth / 2;
-            py = screenHeight / 2;
+            py = Math.round(screenHeight * (0.5f - (EyeTrackingManager.HEAD_TRACKING_PITCH_OFFSET_DEG / 20.0f)));
         } else {
-            // Screen center projection from degrees
             float effectiveYaw = (gaze.filteredYaw + manager.getOffsetYaw()) * manager.getSensitivity();
             float effectivePitch = -(gaze.filteredPitch + manager.getOffsetPitch()) * manager.getSensitivity();
             px = Math.round(screenWidth * (0.5f + (effectiveYaw / 25.0f)));
@@ -679,9 +682,10 @@ public class GazeCursorHandler {
         EyeTrackingManager manager = EyeTrackingManager.getInstance();
         if (!manager.isTrackingActive()) return;
 
-        int[] p = getScreenPointerPos(screenWidth, screenHeight);
-        int px = p[0];
-        int py = p[1];
+        if (!hasHit || lastNormX < 0f || lastNormY < 0f) return;
+
+        int px = Math.round(lastNormX * screenWidth);
+        int py = Math.round(lastNormY * screenHeight);
 
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc != null && mc.getWindow() != null) {
@@ -785,6 +789,15 @@ public class GazeCursorHandler {
         EyeTrackingManager manager = EyeTrackingManager.getInstance();
         if (!manager.isTrackingActive()) return;
 
+        // Blink click must be strictly disabled in HEAD_TRACKING mode
+        if (manager.getTrackingMode() == EyeTrackingManager.TrackingMode.HEAD_TRACKING) {
+            if (wasBlinkPressedScreen) {
+                triggerScreenClickRelease();
+                wasBlinkPressedScreen = false;
+            }
+            return;
+        }
+
         boolean isInv = isInventoryOrContainerActive(screen);
         boolean blinkEnabled = isInv ? manager.isBlinkInInventory() : manager.isBlinkInMenus();
         if (!blinkEnabled) {
@@ -799,7 +812,7 @@ public class GazeCursorHandler {
         long now = System.currentTimeMillis();
 
         if (isBlinking && !wasBlinkPressedScreen) {
-            if (now - lastBlinkClickScreenTime > 350) {
+            if (now - lastBlinkClickScreenTime > 300) {
                 wasBlinkPressedScreen = true;
                 blinkPressScreenTime = now;
                 triggerScreenClickPress(screen);
@@ -817,40 +830,75 @@ public class GazeCursorHandler {
 
     private void triggerScreenClickPress(Screen screen) {
         VROverlayScreen activeOverlay = getActiveOverlayScreen();
-        if (activeOverlay != null) {
-            int px = activeOverlay.getMouseX();
-            int py = activeOverlay.getMouseY();
-            if (px < 0 || py < 0) {
-                int[] p = getOverlayPointerPos(activeOverlay, activeOverlay.getWidth(), activeOverlay.getHeight());
-                if (p != null) {
-                    px = p[0];
-                    py = p[1];
+        if (activeOverlay == null) {
+            activeOverlay = getLastTargetOverlay();
+        }
+
+        if (activeOverlay != null && activeOverlay.isVisible()) {
+            int w = activeOverlay.getWidth();
+            int h = activeOverlay.getHeight();
+            int px = (hasHit() && lastNormX >= 0f && lastNormY >= 0f)
+                    ? Math.round(lastNormX * w)
+                    : (activeOverlay.getActiveCursorData() != null ? activeOverlay.getActiveCursorData().getCursorX() : 0);
+            int py = (hasHit() && lastNormX >= 0f && lastNormY >= 0f)
+                    ? Math.round(lastNormY * h)
+                    : (activeOverlay.getActiveCursorData() != null ? activeOverlay.getActiveCursorData().getCursorY() : 0);
+
+            if (px >= 0 && py >= 0 && px <= w && py <= h) {
+                blinkSyntheticUpdate = true;
+                try {
+                    // Keep overlay hover state locked to the pre-blink gaze position
+                    activeOverlay.updateCursorData(true, (float) px / (float) w, (float) py / (float) h);
+                    activeOverlay.mouseClicked((double) px, (double) py, 0);
+                    activeOverlay.startDragMouse(0);
+                } finally {
+                    blinkSyntheticUpdate = false;
                 }
-            }
-            if (px >= 0 && py >= 0) {
-                activeOverlay.mouseClicked((double) px, (double) py, 0);
+                return;
             }
         }
-        InputHelper.pressMouse(MouseButtonType.LEFT);
+
+        if (screen != null) {
+            int px = (hasHit() && lastNormX >= 0f) ? Math.round(lastNormX * screen.width) : screen.width / 2;
+            int py = (hasHit() && lastNormY >= 0f) ? Math.round(lastNormY * screen.height) : screen.height / 2;
+            screen.mouseClicked((double) px, (double) py, 0);
+        }
     }
 
     private void triggerScreenClickRelease() {
         VROverlayScreen activeOverlay = getActiveOverlayScreen();
-        if (activeOverlay != null) {
-            int px = activeOverlay.getMouseX();
-            int py = activeOverlay.getMouseY();
-            if (px < 0 || py < 0) {
-                int[] p = getOverlayPointerPos(activeOverlay, activeOverlay.getWidth(), activeOverlay.getHeight());
-                if (p != null) {
-                    px = p[0];
-                    py = p[1];
-                }
-            }
+        if (activeOverlay == null) {
+            activeOverlay = getLastTargetOverlay();
+        }
+
+        if (activeOverlay != null && activeOverlay.isVisible()) {
+            int w = activeOverlay.getWidth();
+            int h = activeOverlay.getHeight();
+            int px = (hasHit() && lastNormX >= 0f && lastNormY >= 0f)
+                    ? Math.round(lastNormX * w)
+                    : (activeOverlay.getActiveCursorData() != null ? activeOverlay.getActiveCursorData().getCursorX() : 0);
+            int py = (hasHit() && lastNormX >= 0f && lastNormY >= 0f)
+                    ? Math.round(lastNormY * h)
+                    : (activeOverlay.getActiveCursorData() != null ? activeOverlay.getActiveCursorData().getCursorY() : 0);
+
             if (px >= 0 && py >= 0) {
-                activeOverlay.mouseReleased((double) px, (double) py, 0);
+                blinkSyntheticUpdate = true;
+                try {
+                    activeOverlay.mouseReleased((double) px, (double) py, 0);
+                    activeOverlay.finishDragMouse(0);
+                } finally {
+                    blinkSyntheticUpdate = false;
+                }
+                return;
             }
         }
-        InputHelper.releaseMouse(MouseButtonType.LEFT);
+
+        Screen screen = getActiveScreen();
+        if (screen != null) {
+            int px = (hasHit() && lastNormX >= 0f) ? Math.round(lastNormX * screen.width) : screen.width / 2;
+            int py = (hasHit() && lastNormY >= 0f) ? Math.round(lastNormY * screen.height) : screen.height / 2;
+            screen.mouseReleased((double) px, (double) py, 0);
+        }
     }
 
     public void updateBlinkWorld() {
@@ -871,10 +919,15 @@ public class GazeCursorHandler {
         }
 
         EyeTrackingManager manager = EyeTrackingManager.getInstance();
-        if (!manager.isTrackingActive()) {
+        if (!manager.isTrackingActive() || manager.getTrackingMode() == EyeTrackingManager.TrackingMode.HEAD_TRACKING) {
             if (isAutoChargingCrossbow) {
                 InputHelper.releaseMouse(MouseButtonType.RIGHT);
                 isAutoChargingCrossbow = false;
+            }
+            if (wasBlinkPressedWorld && activeWorldBlinkBtn != null) {
+                InputHelper.releaseMouse(activeWorldBlinkBtn);
+                wasBlinkPressedWorld = false;
+                activeWorldBlinkBtn = null;
             }
             return;
         }

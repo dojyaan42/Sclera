@@ -1,0 +1,76 @@
+plugins {
+    id 'dev.architectury.loom' version '1.9.436'
+}
+
+def sharedProperties = new Properties()
+file('../gradle.properties').withInputStream { sharedProperties.load(it) }
+version = sharedProperties.mod_version
+group = sharedProperties.maven_group
+def visorVersion = project.findProperty('visorVersion') ?: '0.6.0-beta'
+base { archivesName = 'Sclera' }
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://api.modrinth.com/maven' }
+}
+
+loom {
+    forge { mixinConfig 'sclera.mixins.json' }
+    mixin { defaultRefmapName = 'sclera.refmap.json' }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${sharedProperties.minecraft_version}"
+    mappings "net.fabricmc:yarn:${sharedProperties.yarn_mappings}:v2"
+    forge 'net.minecraftforge:forge:1.20.1-47.4.23'
+    modImplementation "maven.modrinth:visor:${visorVersion}+mc1.20.1-forge"
+    modImplementation 'maven.modrinth:visoressentials:0.6.0-alpha.1+mc1.20.1-forge'
+    modCompileOnly 'maven.modrinth:oculus:1.20.1-1.8.0'
+    compileOnly(annotationProcessor('io.github.llamalad7:mixinextras-common:0.4.1'))
+    implementation(include('io.github.llamalad7:mixinextras-forge:0.4.1'))
+    // Minecraft already provides JNA 5.12.1. A second nested JNA module prevents
+    // Forge's Java module layer from starting (duplicate com.sun.jna module).
+}
+
+// Preserve the Fabric 1.7.0 sources verbatim. Only loader APIs and literal
+// runtime class descriptors differ in the generated Forge compilation input.
+def generateForgeSources = tasks.register('generateForgeSources', Sync) {
+    from('../src/main/java') {
+        exclude 'org/sclera/ScleraMod.java'
+        exclude 'org/sclera/ui/screens/ScleraModMenu.java'
+        filter { String line ->
+            line.replace('FabricLoader.getInstance().getModContainer("visor").map(mod -> mod.getMetadata().getVersion().getFriendlyString()).orElse("")', 'ForgePlatform.getInstance().getModVersion("visor")')
+                .replace('net.fabricmc.loader.api.FabricLoader', 'org.sclera.forge.ForgePlatform')
+                .replace('FabricLoader', 'ForgePlatform')
+                .replace('Lnet/minecraft/class_757;', 'Lnet/minecraft/client/renderer/GameRenderer;')
+                .replace('Lnet/minecraft/class_4184;', 'Lnet/minecraft/client/Camera;')
+        }
+        filteringCharset = 'UTF-8'
+    }
+    into(layout.buildDirectory.dir('generated/sources/sclera'))
+}
+
+sourceSets {
+    main {
+        java.srcDir(generateForgeSources)
+        resources.srcDir('../src/main/resources')
+        resources.exclude('fabric.mod.json')
+    }
+}
+
+processResources {
+    inputs.property('version', project.version)
+    filesMatching('META-INF/mods.toml') { expand(version: project.version) }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 17
+    options.encoding = 'UTF-8'
+}
+java { withSourcesJar() }
+jar {
+    archiveClassifier = 'forge'
+    from('../LICENSE') { rename { 'LICENSE_Sclera' } }
+    manifest { attributes('MixinConfigs': 'sclera.mixins.json') }
+}
+remapJar { archiveClassifier = 'forge' }

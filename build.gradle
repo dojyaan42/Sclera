@@ -1,10 +1,11 @@
 plugins {
-    id 'fabric-loom' version '1.7-SNAPSHOT'
+    id 'fabric-loom' version '1.9.2'
     id 'maven-publish'
 }
 
 version = project.mod_version
 group = project.maven_group
+def visorVersion = project.findProperty('visorVersion') ?: '0.6.0-beta'
 
 base {
     archivesName = project.archives_base_name
@@ -20,6 +21,10 @@ repositories {
         name = "TerraformersMC"
         url = "https://maven.terraformersmc.com/"
     }
+    maven {
+        name = "Modrinth"
+        url = "https://api.modrinth.com/maven"
+    }
 }
 
 dependencies {
@@ -30,9 +35,16 @@ dependencies {
     // ModMenu API (optional compile-time dependency)
     modCompileOnly "com.terraformersmc:modmenu:7.2.2"
 
-    // Reference Visor API with Loom 1.7
-    modCompileOnly files("libs/Visor-0.6.0-alpha.1+mc1.20.1-fabric.jar")
-    modCompileOnly files("libs/VisorEssentials-0.6.0-alpha.1+mc1.20.1-fabric.jar")
+    // Compile against required and optional mods without bundling them in Sclera.
+    modCompileOnly "maven.modrinth:visor:${visorVersion}+mc1.20.1-fabric"
+    modCompileOnly "maven.modrinth:visoressentials:0.6.0-alpha.1+mc1.20.1-fabric"
+    modCompileOnly "maven.modrinth:iris:1.7.6+1.20.1"
+
+    // WrapMethod must also work on loaders whose bundled MixinExtras predates it.
+    include(implementation(annotationProcessor('io.github.llamalad7:mixinextras-fabric:0.4.1')))
+
+    // Minecraft already provides JNA in its runtime libraries.
+    compileOnly "net.java.dev.jna:jna:5.14.0"
 }
 
 processResources {

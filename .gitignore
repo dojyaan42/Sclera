@@ -1,21 +1,40 @@
-# Gradle build outputs and caches
-.gradle/
-build/
-bin/
+# Publish only the files required to build and distribute the project.
+*
+!/.gitignore
+!/LICENSE
+!/README.md
+!/build.gradle
+!/settings.gradle
+!/gradle.properties
+!/gradlew
+!/gradlew.bat
 
-# Fabric Loom runtime directory
-run/
-.fabric/
+!/gradle/
+!/gradle/wrapper/
+!/gradle/wrapper/gradle-wrapper.jar
+!/gradle/wrapper/gradle-wrapper.properties
 
-# IDE files
-.idea/
-*.iml
-.vscode/
-*.ipr
-*.iws
+!/src/
+!/src/main/
+!/src/main/java/
+!/src/main/java/**/
+!/src/main/java/**/*.java
+!/src/main/resources/
+!/src/main/resources/**/
+!/src/main/resources/**/*.json
+!/src/main/resources/**/*.png
+!/src/main/resources/pack.mcmeta
 
-# Temporary / OS files
-.DS_Store
-Thumbs.db
-*.log
-temp_find.ps1
+!/forge/
+!/forge/README.md
+!/forge/build.gradle
+!/forge/settings.gradle
+!/forge/gradle.properties
+!/forge/src/
+!/forge/src/main/
+!/forge/src/main/java/
+!/forge/src/main/java/**/
+!/forge/src/main/java/**/*.java
+!/forge/src/main/resources/
+!/forge/src/main/resources/META-INF/
+!/forge/src/main/resources/META-INF/mods.toml

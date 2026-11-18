@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "id": "sclera",
-  "version": "1.0.0",
+  "version": "${version}",
   "name": "Sclera",
   "description": "Eye Tracking for Minecraft VR",
   "authors": [
     "dojyaan42"
   ],
   "license": "MIT",
-  "environment": "client",
+  "environment": "*",
   "icon": "assets/sclera/icon.png",
   "entrypoints": {
     "main": [
@@ -22,14 +22,14 @@
     "sclera.mixins.json"
   ],
   "depends": {
-    "fabricloader": ">=0.14.14",
+    "fabricloader": ">=0.15.0",
     "minecraft": [
       "1.20",
       "1.20.1"
-    ]
+    ],
+    "visor": ">=0.5.0"
   },
   "suggests": {
-    "visor": ">=0.5.0",
     "modmenu": "*"
   }
 }

@@ -32,7 +32,18 @@ public abstract class MouseClickHandlerMixin {
     private void sclera$onPress(HandType handType, CallbackInfo ci) {
         EyeTrackingManager manager = EyeTrackingManager.getInstance();
         Screen activeScreen = GazeCursorHandler.getInstance().getActiveScreen();
+        if (GazeCursorHandler.getInstance().isChatInputHandsOnly()) {
+            GazeCursorHandler.getInstance().setHandControllingMenu(handType, true);
+            return;
+        }
         if (manager != null && manager.isTrackingActive() && activeScreen != null) {
+            // ScleraCalibrationScreen: ANY trigger pull triggers center calibration immediately
+            if (activeScreen instanceof org.sclera.ui.screens.ScleraCalibrationScreen) {
+                activeScreen.mouseClicked(0, 0, 0);
+                ci.cancel();
+                return;
+            }
+
             // If this hand is actively controlling the menu, let Visor handle the click natively!
             if (GazeCursorHandler.getInstance().isHandControllingMenu(handType)) {
                 return;
@@ -78,6 +89,10 @@ public abstract class MouseClickHandlerMixin {
     private void sclera$onRelease(HandType handType, CallbackInfo ci) {
         EyeTrackingManager manager = EyeTrackingManager.getInstance();
         Screen activeScreen = GazeCursorHandler.getInstance().getActiveScreen();
+        if (GazeCursorHandler.getInstance().isChatInputHandsOnly()) {
+            GazeCursorHandler.getInstance().setHandControllingMenu(handType, true);
+            return;
+        }
         if (manager != null && manager.isTrackingActive() && activeScreen != null) {
             if (GazeCursorHandler.getInstance().isHandControllingMenu(handType)) {
                 return;

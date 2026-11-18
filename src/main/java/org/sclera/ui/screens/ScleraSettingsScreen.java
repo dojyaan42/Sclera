@@ -8,6 +8,7 @@ import net.minecraft.client.sound.PositionedSoundInstance;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.text.Text;
 import org.sclera.tracking.EyeTrackingManager;
+import org.sclera.config.ScleraSettings;
 import org.sclera.tracking.GazeData;
 import org.sclera.ui.widgets.SettingButtonWidget;
 
@@ -66,6 +67,8 @@ public class ScleraSettingsScreen extends Screen {
         .tooltip(Tooltip.of(Text.literal("Aligns gaze center with the middle of your VR view.")))
         .build());
 
+        updateLabels();
+
         // Card 1: Gameplay & Visuals (4 items)
         this.addDrawableChild(new SettingButtonWidget(
             leftBtnX, cardY + 20, btnW, 20,
@@ -78,25 +81,40 @@ public class ScleraSettingsScreen extends Screen {
         this.addDrawableChild(new SettingButtonWidget(
             leftBtnX, cardY + 20 + rowH, btnW, 20,
             "Bow Aim",
-            () -> manager.isBowGazeAimEnabled() ? "§bGaze" : "§7Hand",
-            btn -> manager.setBowGazeAimEnabled(!manager.isBowGazeAimEnabled()),
+            () -> !canUseGaze(manager) || manager.getWorldInteractionMode() == EyeTrackingManager.WorldInteractionMode.HANDS_ONLY
+                ? "§7Disabled"
+                : (manager.isBowGazeAimEnabled() ? (manager.getTrackingMode() == EyeTrackingManager.TrackingMode.HEAD_TRACKING ? "§bHead" : "§bEyes") : "§7Hand"),
+            () -> canUseGaze(manager) && manager.getWorldInteractionMode() != EyeTrackingManager.WorldInteractionMode.HANDS_ONLY,
+            btn -> {
+                if (canUseGaze(manager) && manager.getWorldInteractionMode() != EyeTrackingManager.WorldInteractionMode.HANDS_ONLY) {
+                    manager.setBowGazeAimEnabled(!manager.isBowGazeAimEnabled());
+                }
+            },
             Tooltip.of(Text.literal("Arrows fly directly to where you look instead of hand tilt."))
         ));
 
         this.addDrawableChild(new SettingButtonWidget(
             leftBtnX, cardY + 20 + (rowH * 2), btnW, 20,
             "Reticle",
-            () -> manager.getCrosshairMode().getLabel(),
-            btn -> manager.cycleCrosshairMode(),
+            () -> canUseWorldReticle(manager) ? manager.getCrosshairMode().getLabel() : "§7Disabled",
+            () -> canUseWorldReticle(manager),
+            btn -> {
+                if (canUseWorldReticle(manager)) manager.cycleCrosshairMode();
+            },
             Tooltip.of(Text.literal("Visual reticle showing gaze focus: Subtle Dot, Debug, or Off."))
         ));
 
         this.addDrawableChild(new SettingButtonWidget(
             leftBtnX, cardY + 20 + (rowH * 3), btnW, 20,
             "Blink Action",
-            () -> manager.getBlinkWorldAction().getLabel(),
-            btn -> manager.cycleBlinkWorldAction(),
-            Tooltip.of(Text.literal("Hands-free action on blink: Place block, Break/Attack, or Off."))
+            () -> !canUseBlink(manager, manager.isGazeInWorld()) ? "§7Disabled" : manager.getBlinkWorldAction().getLabel(),
+            () -> canUseBlink(manager, manager.isGazeInWorld()),
+            btn -> {
+                if (canUseBlink(manager, manager.isGazeInWorld())) {
+                    manager.cycleBlinkWorldAction();
+                }
+            },
+            Tooltip.of(Text.literal("Hands-free world action on blink. Requires active eye tracking and eye aiming in the world."))
         ));
 
         // Card 2: Interface & Presets (4 items)
@@ -105,19 +123,22 @@ public class ScleraSettingsScreen extends Screen {
             "Mode",
             this::getUIModeBadge,
             btn -> cycleUIMode(manager),
-            Tooltip.of(Text.literal("Interface interaction mode: Hybrid (Eyes + Hands), Eyes Only, or Hands Only."))
+            Tooltip.of(Text.literal("Interface interaction mode: Hybrid (Eyes/Head + Hands), Eyes/Head Only, or Hands Only."))
         ));
 
         this.addDrawableChild(new SettingButtonWidget(
             rightBtnX, cardY + 20 + rowH, btnW, 20,
             "Blink Click",
-            () -> (manager.isBlinkInMenus() || manager.isBlinkInInventory()) ? "§dOn" : "§7Off",
+            () -> !canUseBlink(manager, manager.isGazeInMenus() || manager.isGazeInInventory()) ? "§7Disabled" : (isBlinkEnabledInGazeDomains(manager) ? "§dOn" : "§7Off"),
+            () -> canUseBlink(manager, manager.isGazeInMenus() || manager.isGazeInInventory()),
             btn -> {
-                boolean nextState = !(manager.isBlinkInMenus() || manager.isBlinkInInventory());
-                manager.setBlinkInMenus(nextState);
-                manager.setBlinkInInventory(nextState);
+                if (canUseBlink(manager, manager.isGazeInMenus() || manager.isGazeInInventory())) {
+                    boolean nextState = !isBlinkEnabledInGazeDomains(manager);
+                    if (manager.isGazeInMenus()) manager.setBlinkInMenus(nextState);
+                    if (manager.isGazeInInventory()) manager.setBlinkInInventory(nextState);
+                }
             },
-            Tooltip.of(Text.literal("A quick blink performs a left click without pressing controller triggers."))
+            Tooltip.of(Text.literal("A quick blink clicks in gaze-controlled menus and inventory."))
         ));
 
         this.addDrawableChild(ButtonWidget.builder(
@@ -135,7 +156,7 @@ public class ScleraSettingsScreen extends Screen {
         this.addDrawableChild(ButtonWidget.builder(
             Text.literal("Reset Defaults"),
             btn -> {
-                manager.resetDefaults();
+                ScleraSettings.resetDefaults();
                 updateLabels();
                 if (this.client != null) {
                     this.client.getSoundManager().play(
@@ -148,7 +169,19 @@ public class ScleraSettingsScreen extends Screen {
         .tooltip(Tooltip.of(Text.literal("Restore all settings to recommended defaults.")))
         .build());
 
-        // Footer: Centered Back Button
+        // Footer: Foveated Rendering & Back Button
+        this.addDrawableChild(ButtonWidget.builder(
+            Text.literal("Foveated Rendering..."),
+            btn -> {
+                if (this.client != null) {
+                    this.client.setScreen(new ScleraFoveationSettingsScreen(this));
+                }
+            }
+        )
+        .dimensions(cx - 150, cardY + cardH + 8, 145, 20)
+        .tooltip(Tooltip.of(Text.literal("Configure hardware Variable Rate Shading and foveation presets.")))
+        .build());
+
         this.addDrawableChild(ButtonWidget.builder(
             Text.literal("Back"),
             btn -> {
@@ -157,7 +190,7 @@ public class ScleraSettingsScreen extends Screen {
                 }
             }
         )
-        .dimensions(cx - 60, cardY + cardH + 8, 120, 20)
+        .dimensions(cx + 5, cardY + cardH + 8, 145, 20)
         .tooltip(Tooltip.of(Text.literal("Save settings and return to previous menu.")))
         .build());
 
@@ -166,12 +199,13 @@ public class ScleraSettingsScreen extends Screen {
 
     private String getUIModeBadge() {
         EyeTrackingManager manager = EyeTrackingManager.getInstance();
+        if (manager.mustUseHandsOnly()) return "§dHands Only";
         boolean gm = manager.isGazeInMenus();
         boolean gi = manager.isGazeInInventory();
         boolean hm = manager.isHandsInMenus();
         boolean hi = manager.isHandsInInventory();
-        boolean bm = manager.isBlinkInMenus();
-        boolean bi = manager.isBlinkInInventory();
+        boolean bm = manager.isGazeInMenus() && manager.isBlinkInMenus();
+        boolean bi = manager.isGazeInInventory() && manager.isBlinkInInventory();
 
         // If blink in 2D menus or inventory is enabled, it modifies the preset to Custom
         if (bm || bi) {
@@ -181,27 +215,26 @@ public class ScleraSettingsScreen extends Screen {
         if (gm && gi && hm && hi) {
             return "§dHybrid";
         } else if (gm && gi && !hm && !hi) {
-            return "§dEyes Only";
+            return (manager.getTrackingMode() == EyeTrackingManager.TrackingMode.HEAD_TRACKING ? "§dHead Only" : "§dEyes Only");
         } else if (!gm && !gi && hm && hi) {
             return "§dHands Only";
-        } else if (!gm && !gi && !hm && !hi) {
-            return "§7Off";
         } else {
-            return "§7Custom";
+            return !gm && !gi ? "§dHands Only" : "§7Custom";
         }
     }
 
     private void cycleUIMode(EyeTrackingManager manager) {
+        if (manager.mustUseHandsOnly()) return;
         String current = getUIModeBadge();
         if (current.contains("Hybrid")) {
-            // Switch to Eyes Only
+            // Switch to Eyes Only / Head Only
             manager.setGazeInMenus(true);
             manager.setGazeInInventory(true);
             manager.setHandsInMenus(false);
             manager.setHandsInInventory(false);
             manager.setBlinkInMenus(false);
             manager.setBlinkInInventory(false);
-        } else if (current.contains("Eyes Only")) {
+        } else if (current.contains("Eyes Only") || current.contains("Head Only")) {
             // Switch to Hands Only
             manager.setHandsInMenus(true);
             manager.setHandsInInventory(true);
@@ -225,6 +258,39 @@ public class ScleraSettingsScreen extends Screen {
         if (trackingModeBtn != null) {
             trackingModeBtn.setMessage(Text.literal("Aim Source: " + manager.getTrackingMode().getLabel()));
         }
+        updateCalibrationButton(manager);
+    }
+
+    private boolean canUseGaze(EyeTrackingManager manager) {
+        return manager.getTrackingMode() == EyeTrackingManager.TrackingMode.HEAD_TRACKING
+                || (manager.getTrackingMode() == EyeTrackingManager.TrackingMode.EYE_TRACKING
+                    && manager.isTrackingActive());
+    }
+
+    private boolean canUseWorldReticle(EyeTrackingManager manager) {
+        EyeTrackingManager.WorldInteractionMode mode = manager.getWorldInteractionMode();
+        return canUseGaze(manager) && manager.isGazeInWorld()
+                && mode != EyeTrackingManager.WorldInteractionMode.HANDS_ONLY;
+    }
+
+    private boolean canUseBlink(EyeTrackingManager manager, boolean gazeEnabled) {
+        return manager.getTrackingMode() == EyeTrackingManager.TrackingMode.EYE_TRACKING
+                && manager.isTrackingActive() && gazeEnabled;
+    }
+
+    private boolean isBlinkEnabledInGazeDomains(EyeTrackingManager manager) {
+        return (manager.isGazeInMenus() && manager.isBlinkInMenus())
+                || (manager.isGazeInInventory() && manager.isBlinkInInventory());
+    }
+
+    private void updateCalibrationButton(EyeTrackingManager manager) {
+        if (calibrateBtn == null) return;
+        boolean canCalibrate = manager.getTrackingMode() == EyeTrackingManager.TrackingMode.EYE_TRACKING
+                && manager.isTrackingActive();
+        calibrateBtn.active = canCalibrate;
+        calibrateBtn.setTooltip(Tooltip.of(Text.literal(canCalibrate
+                ? "Aligns gaze center with the middle of your VR view."
+                : "Calibration needs an active eye-tracking signal.")));
     }
 
     private void drawCard(DrawContext context, int x, int y, int w, int h, int bgColor, int borderColor) {
@@ -249,6 +315,7 @@ public class ScleraSettingsScreen extends Screen {
         int cardH = 115;
 
         EyeTrackingManager manager = EyeTrackingManager.getInstance();
+        updateCalibrationButton(manager);
         GazeData gaze = manager.getGazeData();
         boolean active = manager.isTrackingActive();
 
@@ -263,11 +330,15 @@ public class ScleraSettingsScreen extends Screen {
         } else if (manager.isSimulationMode()) {
             context.drawCenteredTextWithShadow(this.textRenderer, Text.literal("§e● Simulation Active §7(Generating Test Saccades)"), cx, 17, 0xAAAAAA);
         } else if (active) {
-            String telemetry = String.format("§a● Connected §7(UDP 9000)  |  §7Yaw: §f%.2f° §7Pitch: §f%.2f° §7Blink: %s",
+            String source = manager.getEyeTrackingSource() == EyeTrackingManager.EyeTrackingSource.PSVR2
+                    ? "PSVR2 Toolkit" : "UDP 9000";
+            String telemetry = String.format("§a● Connected §7(%s)  |  §7Yaw: §f%.2f° §7Pitch: §f%.2f° §7Blink: %s", source,
                 gaze.filteredYaw, gaze.filteredPitch, gaze.blink ? "§dOn" : "§7Off");
             context.drawCenteredTextWithShadow(this.textRenderer, Text.literal(telemetry), cx, 17, 0xAAAAAA);
         } else {
-            context.drawCenteredTextWithShadow(this.textRenderer, Text.literal("§c○ Waiting for Signal §7(UDP 9000 / 9002)  |  §7Yaw: 0.00° Pitch: 0.00°"), cx, 17, 0xAAAAAA);
+            String source = manager.getEyeTrackingSource() == EyeTrackingManager.EyeTrackingSource.PSVR2
+                    ? "PSVR2 Toolkit" : "UDP 9000 / 9002";
+            context.drawCenteredTextWithShadow(this.textRenderer, Text.literal("§c○ Waiting for Signal §7(" + source + ")  |  §7Yaw: 0.00° Pitch: 0.00°"), cx, 17, 0xAAAAAA);
         }
 
         // Card 1: Gameplay & Visuals (4 items) - Cyan header

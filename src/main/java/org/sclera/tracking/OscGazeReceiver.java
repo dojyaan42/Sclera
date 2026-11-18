@@ -17,6 +17,10 @@ public class OscGazeReceiver implements Runnable {
     private volatile boolean running = false;
     private DatagramSocket socket;
 
+    private long packetsReceived = 0;
+    private long packetsDropped = 0;
+    private long lastPacketTimeMs = 0;
+
     public OscGazeReceiver(int port, EyeTrackingManager manager) {
         this.port = port;
         this.manager = manager;
@@ -37,6 +41,22 @@ public class OscGazeReceiver implements Runnable {
         }
     }
 
+    public int getPort() {
+        return port;
+    }
+
+    public long getPacketsReceived() {
+        return packetsReceived;
+    }
+
+    public long getPacketsDropped() {
+        return packetsDropped;
+    }
+
+    public long getLastPacketTimeMs() {
+        return lastPacketTimeMs;
+    }
+
     @Override
     public void run() {
         byte[] buffer = new byte[4096];
@@ -47,10 +67,11 @@ public class OscGazeReceiver implements Runnable {
             while (running && !socket.isClosed()) {
                 DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                 socket.receive(packet);
+                lastPacketTimeMs = System.currentTimeMillis();
                 parsePacket(packet.getData(), packet.getLength());
             }
         } catch (Exception e) {
-            // Ignored when stopped
+            // Ignored when stopped normally
         } finally {
             if (socket != null && !socket.isClosed()) {
                 socket.close();
@@ -58,8 +79,11 @@ public class OscGazeReceiver implements Runnable {
         }
     }
 
-    private void parsePacket(byte[] data, int length) {
-        if (length < 4) return;
+    public void parsePacket(byte[] data, int length) {
+        if (data == null || length < 4 || length > data.length) {
+            packetsDropped++;
+            return;
+        }
 
         // 1. Plain JSON
         if (data[0] == '{') {
@@ -77,7 +101,10 @@ public class OscGazeReceiver implements Runnable {
                              | ((data[offset + 2] & 0xFF) << 8)
                              | (data[offset + 3] & 0xFF);
                 offset += 4;
-                if (elemSize <= 0 || offset + elemSize > length) break;
+                if (elemSize <= 0 || elemSize > length - offset) {
+                    packetsDropped++;
+                    break;
+                }
                 parseMessage(data, offset, elemSize);
                 offset += elemSize;
             }
@@ -94,13 +121,22 @@ public class OscGazeReceiver implements Runnable {
             int maxEnd = startOffset + length;
 
             String address = readNullTerminatedString(data, offset, maxEnd);
-            if (address == null) return;
+            if (address == null) {
+                packetsDropped++;
+                return;
+            }
             offset = align4(offset + address.length() + 1);
 
-            if (offset >= maxEnd) return;
+            if (offset >= maxEnd) {
+                packetsDropped++;
+                return;
+            }
 
             String typeTags = readNullTerminatedString(data, offset, maxEnd);
-            if (typeTags == null || !typeTags.startsWith(",")) return;
+            if (typeTags == null || !typeTags.startsWith(",")) {
+                packetsDropped++;
+                return;
+            }
             offset = align4(offset + typeTags.length() + 1);
 
             DataInputStream dis = new DataInputStream(new ByteArrayInputStream(data, offset, maxEnd - offset));
@@ -110,22 +146,60 @@ public class OscGazeReceiver implements Runnable {
                 float leftYaw = dis.readFloat();
                 float rightPitch = dis.readFloat();
                 float rightYaw = dis.readFloat();
-                float avgPitch = (leftPitch + rightPitch) * 0.5f;
-                float avgYaw = (leftYaw + rightYaw) * 0.5f;
-                manager.onRawGazeReceived(avgPitch, avgYaw, false);
+
+                boolean leftValid = isValidAngle(leftPitch) && isValidAngle(leftYaw);
+                boolean rightValid = isValidAngle(rightPitch) && isValidAngle(rightYaw);
+
+                if (leftValid || rightValid) {
+                    if (!acceptValidPacket()) return;
+                    // Update atomic binocular sample for foveated rendering
+                    manager.onBinocularGazeReceived(leftPitch, leftYaw, leftValid, rightPitch, rightYaw, rightValid);
+
+                    // Update smoothed average for gameplay cursor interaction
+                    float avgPitch = (leftValid && rightValid) ? (leftPitch + rightPitch) * 0.5f : (leftValid ? leftPitch : rightPitch);
+                    float avgYaw = (leftValid && rightValid) ? (leftYaw + rightYaw) * 0.5f : (leftValid ? leftYaw : rightYaw);
+                    manager.onCursorGazeReceived(avgPitch, avgYaw, false);
+                } else {
+                    packetsDropped++;
+                }
             } else if (address.equals("/tracking/eye/EyesClosedAmount") && typeTags.equals(",f")) {
                 float closed = dis.readFloat();
-                manager.onEyeLidReceived(1.0f - closed);
+                if (!Float.isNaN(closed) && !Float.isInfinite(closed)) {
+                    if (!acceptValidPacket()) return;
+                    manager.onEyeLidReceived(Math.max(0.0f, Math.min(1.0f, 1.0f - closed)));
+                } else {
+                    packetsDropped++;
+                }
             } else if (typeTags.equals(",f")) {
                 float value = dis.readFloat();
-                handleSingleParameter(address, value);
+                if (!Float.isNaN(value) && !Float.isInfinite(value)) {
+                    handleSingleParameter(address, value);
+                } else {
+                    packetsDropped++;
+                }
             }
-        } catch (Exception ignored) {
-            // Ignore malformed element
+        } catch (Exception e) {
+            packetsDropped++;
         }
     }
 
+    private static boolean isValidAngle(float angle) {
+        return !Float.isNaN(angle) && !Float.isInfinite(angle) && Math.abs(angle) <= 90.0f;
+    }
+
     private void handleSingleParameter(String address, float value) {
+        boolean lid = address.equals("/avatar/parameters/EyeLidLeft")
+                || address.equals("/avatar/parameters/EyeLidRight") || address.equals("/avatar/parameters/EyeLids");
+        boolean angle = switch (address) {
+            case "/avatar/parameters/EyesPitch", "/avatar/parameters/v2/EyesPitch",
+                    "/avatar/parameters/EyesYaw", "/avatar/parameters/v2/EyesYaw",
+                    "/avatar/parameters/EyeLeftPitch", "/avatar/parameters/EyeLeftYaw",
+                    "/avatar/parameters/EyeRightPitch", "/avatar/parameters/EyeRightYaw" -> true;
+            default -> false;
+        };
+        if ((!lid && !angle) || (angle && !isValidAngle(value))) { packetsDropped++; return; }
+        if (!acceptValidPacket()) return;
+        if (lid) value = Math.max(0f, Math.min(1f, value));
         switch (address) {
             case "/avatar/parameters/EyesPitch":
             case "/avatar/parameters/v2/EyesPitch":
@@ -148,7 +222,11 @@ public class OscGazeReceiver implements Runnable {
                 manager.onRightYawReceived(value);
                 break;
             case "/avatar/parameters/EyeLidLeft":
+                manager.onEyeLidReceived(true, value);
+                break;
             case "/avatar/parameters/EyeLidRight":
+                manager.onEyeLidReceived(false, value);
+                break;
             case "/avatar/parameters/EyeLids":
                 manager.onEyeLidReceived(value);
                 break;
@@ -157,30 +235,19 @@ public class OscGazeReceiver implements Runnable {
 
     private void parseJson(String json) {
         try {
-            float yaw = 0f, pitch = 0f;
-            boolean blink = false;
-            boolean hasYaw = false, hasPitch = false;
-
-            for (String part : json.replace("{", "").replace("}", "").replace("\"", "").split(",")) {
-                String[] kv = part.split(":");
-                if (kv.length == 2) {
-                    String key = kv[0].trim().toLowerCase();
-                    String val = kv[1].trim();
-                    if (key.equals("yaw")) {
-                        yaw = Float.parseFloat(val);
-                        hasYaw = true;
-                    } else if (key.equals("pitch")) {
-                        pitch = Float.parseFloat(val);
-                        hasPitch = true;
-                    } else if (key.equals("blink")) {
-                        blink = Boolean.parseBoolean(val);
-                    }
-                }
-            }
-            if (hasYaw && hasPitch) {
+            com.google.gson.JsonObject object = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+            float yaw = object.get("yaw").getAsFloat();
+            float pitch = object.get("pitch").getAsFloat();
+            boolean blink = object.has("blink") && object.get("blink").getAsBoolean();
+            if (isValidAngle(yaw) && isValidAngle(pitch)) {
+                if (!acceptValidPacket()) return;
                 manager.onRawGazeReceived(pitch, yaw, blink);
+            } else {
+                packetsDropped++;
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+            packetsDropped++;
+        }
     }
 
     private static String readNullTerminatedString(byte[] data, int offset, int maxEnd) {
@@ -188,11 +255,17 @@ public class OscGazeReceiver implements Runnable {
         while (end < maxEnd && data[end] != 0) {
             end++;
         }
-        if (end > maxEnd) return null;
+        if (end >= maxEnd) return null;
         return new String(data, offset, end - offset, StandardCharsets.UTF_8);
     }
 
     private static int align4(int pos) {
         return (pos + 3) & ~3;
+    }
+
+    private boolean acceptValidPacket() {
+        if (!manager.acceptPacketFromPort(port)) { packetsDropped++; return false; }
+        packetsReceived++;
+        return true;
     }
 }

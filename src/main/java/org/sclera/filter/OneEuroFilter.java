@@ -23,7 +23,7 @@ public class OneEuroFilter {
 
     public OneEuroFilter() {
         // minCutoff = 1.2 Hz (smooth at rest, jitter-free)
-        // beta = 0.08 (adaptive speed: snaps in < 5ms during saccades for 60-120fps feel)
+        // beta controls how quickly the filter follows changes in gaze.
         this(1.2, 0.08, 1.0);
     }
 

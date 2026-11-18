@@ -5,6 +5,7 @@ import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.tooltip.Tooltip;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.text.Text;
+import org.sclera.config.ScleraClientConfig;
 import org.sclera.tracking.EyeTrackingManager;
 import org.sclera.ui.widgets.SettingButtonWidget;
 
@@ -14,6 +15,7 @@ import org.sclera.ui.widgets.SettingButtonWidget;
  */
 public class ScleraAdvancedSettingsScreen extends Screen {
     private final Screen parent;
+    private int cardWidth;
 
     public ScleraAdvancedSettingsScreen(Screen parent) {
         super(Text.literal("Sclera - Advanced Settings"));
@@ -25,18 +27,19 @@ public class ScleraAdvancedSettingsScreen extends Screen {
         EyeTrackingManager manager = EyeTrackingManager.getInstance();
         int cx = this.width / 2;
 
-        int cardW = 368;
-        int cardX = cx - (cardW / 2); // cx - 184
+        int cardW = getMenuButtonWidth() * 3 + 20; // two 4px gaps and two 6px margins
+        cardWidth = cardW;
+        int cardX = cx - (cardW / 2);
         int card1Y = 36;
-        int card1H = 66;
+        int card1H = 89;
 
-        int card2Y = card1Y + card1H + 8; // 110
+        int card2Y = card1Y + card1H + 8;
         int card2H = 44;
 
-        // --- Card 1: 2D Menus & Inventories (3 wide x 2 high) ---
-        int innerW = cardW - 12; // 356px
+        // --- Card 1: two 3-column rows and one full-width chat row ---
+        int innerW = cardW - 12;
         int colGap1 = 4;
-        int btnW1 = (innerW - (colGap1 * 2)) / 3; // 116px
+        int btnW1 = (innerW - (colGap1 * 2)) / 3;
         int col1_0 = cardX + 6;
         int col1_1 = col1_0 + btnW1 + colGap1;
         int col1_2 = col1_1 + btnW1 + colGap1;
@@ -46,16 +49,18 @@ public class ScleraAdvancedSettingsScreen extends Screen {
         // Row 1 (Menus)
         this.addDrawableChild(new SettingButtonWidget(
             col1_0, row1_0, btnW1, 20,
-            "Gaze in Menus",
-            () -> manager.isGazeInMenus() ? "§dOn" : "§7Off",
+            () -> manager.getTrackingMode() == EyeTrackingManager.TrackingMode.HEAD_TRACKING ? "Head in Menus" : "Eyes in Menus",
+            () -> !canUseGaze(manager) ? "§7Disabled" : (manager.isGazeInMenus() ? "§dOn" : "§7Off"),
+            () -> canUseGaze(manager),
             btn -> manager.setGazeInMenus(!manager.isGazeInMenus()),
-            Tooltip.of(Text.literal("Look directly at buttons in pause, mod, and options menus."))
+            Tooltip.of(Text.literal("Aim directly at buttons in pause, mod, and options menus."))
         ));
 
         this.addDrawableChild(new SettingButtonWidget(
             col1_1, row1_0, btnW1, 20,
             "Hands in Menus",
-            () -> manager.isHandsInMenus() ? "§dOn" : "§7Off",
+            () -> manager.mustUseHandsOnly() || manager.isHandsInMenus() ? "§dOn" : (!gameplayAvailable(manager) ? "§7Disabled" : "§7Off"),
+            () -> gameplayAvailable(manager) && !manager.mustUseHandsOnly(),
             btn -> manager.setHandsInMenus(!manager.isHandsInMenus()),
             Tooltip.of(Text.literal("Aim at menu buttons using your hands."))
         ));
@@ -63,24 +68,31 @@ public class ScleraAdvancedSettingsScreen extends Screen {
         this.addDrawableChild(new SettingButtonWidget(
             col1_2, row1_0, btnW1, 20,
             "Blink in Menus",
-            () -> manager.isBlinkInMenus() ? "§dOn" : "§7Off",
-            btn -> manager.setBlinkInMenus(!manager.isBlinkInMenus()),
-            Tooltip.of(Text.literal("Quick blink triggers a left click in pause and options menus."))
+            () -> !canUseBlink(manager, manager.isGazeInMenus()) ? "§7Disabled" : (manager.isBlinkInMenus() ? "§dOn" : "§7Off"),
+            () -> canUseBlink(manager, manager.isGazeInMenus()),
+            btn -> {
+                if (canUseBlink(manager, manager.isGazeInMenus())) {
+                    manager.setBlinkInMenus(!manager.isBlinkInMenus());
+                }
+            },
+            Tooltip.of(Text.literal("Quick blink clicks in menus. Requires active eye tracking and eye aiming here."))
         ));
 
         // Row 2 (Inventory)
         this.addDrawableChild(new SettingButtonWidget(
             col1_0, row1_1, btnW1, 20,
-            "Gaze in Inv.",
-            () -> manager.isGazeInInventory() ? "§dOn" : "§7Off",
+            () -> manager.getTrackingMode() == EyeTrackingManager.TrackingMode.HEAD_TRACKING ? "Head in Inv." : "Eyes in Inv.",
+            () -> !canUseGaze(manager) ? "§7Disabled" : (manager.isGazeInInventory() ? "§dOn" : "§7Off"),
+            () -> canUseGaze(manager),
             btn -> manager.setGazeInInventory(!manager.isGazeInInventory()),
-            Tooltip.of(Text.literal("Magnetically snaps gaze to item slots in chests and crafting."))
+            Tooltip.of(Text.literal("Magnetically snaps cursor to item slots in chests and crafting."))
         ));
 
         this.addDrawableChild(new SettingButtonWidget(
             col1_1, row1_1, btnW1, 20,
             "Hands in Inv.",
-            () -> manager.isHandsInInventory() ? "§dOn" : "§7Off",
+            () -> manager.mustUseHandsOnly() || manager.isHandsInInventory() ? "§dOn" : (!gameplayAvailable(manager) ? "§7Disabled" : "§7Off"),
+            () -> gameplayAvailable(manager) && !manager.mustUseHandsOnly(),
             btn -> manager.setHandsInInventory(!manager.isHandsInInventory()),
             Tooltip.of(Text.literal("Aim at inventory slots using your hands."))
         ));
@@ -88,33 +100,65 @@ public class ScleraAdvancedSettingsScreen extends Screen {
         this.addDrawableChild(new SettingButtonWidget(
             col1_2, row1_1, btnW1, 20,
             "Blink in Inv.",
-            () -> manager.isBlinkInInventory() ? "§dOn" : "§7Off",
-            btn -> manager.setBlinkInInventory(!manager.isBlinkInInventory()),
-            Tooltip.of(Text.literal("Quick blink picks up and places items in containers."))
+            () -> !canUseBlink(manager, manager.isGazeInInventory()) ? "§7Disabled" : (manager.isBlinkInInventory() ? "§dOn" : "§7Off"),
+            () -> canUseBlink(manager, manager.isGazeInInventory()),
+            btn -> {
+                if (canUseBlink(manager, manager.isGazeInInventory())) {
+                    manager.setBlinkInInventory(!manager.isBlinkInInventory());
+                }
+            },
+            Tooltip.of(Text.literal("Quick blink handles container items. Requires active eye tracking and eye aiming here."))
+        ));
+
+        ScleraClientConfig config = ScleraClientConfig.getInstance();
+        this.addDrawableChild(new SettingButtonWidget(
+            cardX + 6, row1_1 + 23, innerW, 20,
+            "Tracking in Chat",
+            () -> !canUseGaze(manager) ? "§7Disabled" : (config.isTrackingInChat() ? "§dOn" : "§7Off"),
+            () -> canUseGaze(manager),
+            btn -> {
+                if (canUseGaze(manager)) config.setTrackingInChat(!config.isTrackingInChat());
+            },
+            Tooltip.of(Text.literal("Use eye or head tracking to control chat and its virtual keyboard."))
         ));
 
         // --- Card 2: 3D World & Hand Controls (2 wide x 1 high) ---
         int colGap2 = 6;
-        int btnW2 = (innerW - colGap2) / 2; // 175px
+        int btnW2 = (innerW - colGap2) / 2;
         int col2_0 = cardX + 6;
         int col2_1 = col2_0 + btnW2 + colGap2;
         int row2_0 = card2Y + 18;
 
         this.addDrawableChild(new SettingButtonWidget(
             col2_0, row2_0, btnW2, 20,
-            "Gaze in Blocks",
-            () -> manager.isGazeInWorld() ? "§bOn" : "§7Off",
+            () -> manager.getTrackingMode() == EyeTrackingManager.TrackingMode.HEAD_TRACKING ? "Head in Blocks" : "Eyes in Blocks",
+            () -> !canUseGaze(manager) ? "§7Disabled" : (manager.isGazeInWorld() ? "§bOn" : "§7Off"),
+            () -> canUseGaze(manager),
             btn -> manager.setGazeInWorld(!manager.isGazeInWorld()),
-            Tooltip.of(Text.literal("Highlight and mine blocks where your gaze is focused."))
+            Tooltip.of(Text.literal("Highlight and mine blocks where your aim is focused."))
         ));
 
         this.addDrawableChild(new SettingButtonWidget(
             col2_1, row2_0, btnW2, 20,
             "Hands in World",
-            () -> manager.isHandsInWorld() ? "§bOn" : "§7Off",
+            () -> manager.mustUseHandsOnly() || manager.isHandsInWorld() ? "§bOn" : (!gameplayAvailable(manager) ? "§7Disabled" : "§7Off"),
+            () -> gameplayAvailable(manager) && !manager.mustUseHandsOnly(),
             btn -> manager.setHandsInWorld(!manager.isHandsInWorld()),
             Tooltip.of(Text.literal("Use VR controller hands to aim and swing in the 3D world."))
         ));
+
+        int triggerY = card2Y + card2H + 8;
+        this.addDrawableChild(ButtonWidget.builder(
+            Text.literal("PS VR2 Settings..."),
+            btn -> {
+                if (this.client != null) {
+                    this.client.setScreen(new ScleraPsvr2SettingsScreen(this));
+                }
+            }
+        )
+        .dimensions(cx - 90, triggerY, 180, 20)
+        .tooltip(Tooltip.of(Text.literal("Choose the eye tracking source and configure PS VR2 triggers and vibration.")))
+        .build());
 
         // Footer: Back Button
         this.addDrawableChild(ButtonWidget.builder(
@@ -125,9 +169,35 @@ public class ScleraAdvancedSettingsScreen extends Screen {
                 }
             }
         )
-        .dimensions(cx - 60, card2Y + card2H + 12, 120, 20)
+        .dimensions(cx - 60, triggerY + 25, 120, 20)
         .tooltip(Tooltip.of(Text.literal("Return to Main Settings.")))
         .build());
+    }
+
+    private int getMenuButtonWidth() {
+        int labelWidth = 0;
+        for (String label : new String[]{"Eyes in Menus", "Head in Menus", "Hands in Menus", "Blink in Menus",
+                "Eyes in Inv.", "Head in Inv.", "Hands in Inv.", "Blink in Inv."}) {
+            labelWidth = Math.max(labelWidth, textRenderer.getWidth(label));
+        }
+        int statusWidth = Math.max(textRenderer.getWidth("Disabled"),
+                Math.max(textRenderer.getWidth("On"), textRenderer.getWidth("Off")));
+        return Math.max(116, labelWidth + statusWidth + 24);
+    }
+
+    private boolean gameplayAvailable(EyeTrackingManager manager) {
+        return manager.getTrackingMode() != EyeTrackingManager.TrackingMode.OFF;
+    }
+
+    private boolean canUseGaze(EyeTrackingManager manager) {
+        return manager.getTrackingMode() == EyeTrackingManager.TrackingMode.HEAD_TRACKING
+                || (manager.getTrackingMode() == EyeTrackingManager.TrackingMode.EYE_TRACKING
+                    && manager.isTrackingActive());
+    }
+
+    private boolean canUseBlink(EyeTrackingManager manager, boolean gazeEnabled) {
+        return manager.getTrackingMode() == EyeTrackingManager.TrackingMode.EYE_TRACKING
+                && manager.isTrackingActive() && gazeEnabled;
     }
 
     private void drawCard(DrawContext context, int x, int y, int w, int h, int bgColor, int borderColor) {
@@ -144,10 +214,10 @@ public class ScleraAdvancedSettingsScreen extends Screen {
         this.renderBackground(context);
 
         int cx = this.width / 2;
-        int cardW = 368;
+        int cardW = cardWidth;
         int cardX = cx - (cardW / 2);
         int card1Y = 36;
-        int card1H = 66;
+        int card1H = 89;
         int card2Y = card1Y + card1H + 8;
         int card2H = 44;
 
@@ -155,7 +225,7 @@ public class ScleraAdvancedSettingsScreen extends Screen {
         context.drawCenteredTextWithShadow(this.textRenderer, Text.literal("§e§lSclera §7• §fAdvanced Settings"), cx, 8, 0xFFFFFF);
         context.drawCenteredTextWithShadow(this.textRenderer, Text.literal("§7Independent controls for menus, inventory, and hands"), cx, 20, 0xAAAAAA);
 
-        // Card 1: 2D Menus & Inventories (3 wide x 2 high)
+        // Card 1: menus, inventories, and chat
         drawCard(context, cardX, card1Y, cardW, card1H, 0xDD181822, 0xFF3E3E4C);
         context.drawCenteredTextWithShadow(this.textRenderer, Text.literal("§d§n2D Menus & Inventories"), cx, card1Y + 5, 0xD580FF);
 

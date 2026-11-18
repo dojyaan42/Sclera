@@ -34,6 +34,22 @@ public class HandEffectCrosshairMixin {
             return;
         }
 
+        // When bow is actively drawn/charged, suppress generic hand crosshair in favor of bow aim crosshair
+        if (net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("visor_essentials")) {
+            if (GazeCursorHandler.getInstance().isTridentGazeAimActive()) {
+                cir.setReturnValue(false);
+                return;
+            }
+            try {
+                org.vmstudio.essentials.core.client.tasks.BowItemTask task = org.vmstudio.essentials.core.client.tasks.BowItemTask.getInstance();
+                net.minecraft.client.MinecraftClient mc = net.minecraft.client.MinecraftClient.getInstance();
+                if (task != null && mc != null && mc.player != null && task.isActive(mc.player) && task.isNotched()) {
+                    cir.setReturnValue(false);
+                    return;
+                }
+            } catch (Throwable ignored) {}
+        }
+
         VRLocalPlayerImpl localPlayer = ClientContext.localPlayer;
         if (localPlayer == null) return;
         LocalPlayerPose renderPose = localPlayer.getPoseData(PlayerPoseType.RENDER);
